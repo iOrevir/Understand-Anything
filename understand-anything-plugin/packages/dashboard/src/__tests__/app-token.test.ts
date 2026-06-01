@@ -4,6 +4,10 @@ import { resolveInitialToken, SESSION_TOKEN_KEY } from "../App";
 function createStorage(initial: Record<string, string> = {}) {
   const map = new Map(Object.entries(initial));
   return {
+    get length() {
+      return map.size;
+    },
+    key: (index: number) => Array.from(map.keys())[index] ?? null,
     getItem: (key: string) => map.get(key) ?? null,
     setItem: (key: string, value: string) => void map.set(key, value),
     removeItem: (key: string) => void map.delete(key),

@@ -87,6 +87,9 @@ async function main() {
     try {
       const lst = lstatSync(absolutePath);
       if (lst.isSymbolicLink()) {
+        // Skip symlinks outright so batch analysis cannot follow links outside
+        // projectRoot. realpath containment is still enforced for non-symlink
+        // paths coming from batch input.
         filesSkipped.push(file.path);
         continue;
       }

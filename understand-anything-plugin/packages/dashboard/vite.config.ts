@@ -216,6 +216,7 @@ export function readSourceFile(url: URL) {
 }
 
 export default defineConfig({
+  // @ts-expect-error Vitest extends Vite config with `test`.
   test: {
     environment: "node",
     include: ["src/**/__tests__/**/*.test.ts"],
