@@ -7,6 +7,7 @@ import {
   rmSync,
   chmodSync,
   existsSync,
+  symlinkSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
@@ -734,5 +735,37 @@ describe('scan-project.mjs — output schema invariants', () => {
     const paths = r.output.files.map(f => f.path);
     const sortedPaths = [...paths].sort((a, b) => a.localeCompare(b));
     expect(paths).toEqual(sortedPaths);
+  });
+});
+
+describe('scan-project.mjs — symlink safety', () => {
+  let projectRoot;
+  let outsideRoot;
+
+  afterEach(() => {
+    if (projectRoot) {
+      rmSync(projectRoot, { recursive: true, force: true });
+      projectRoot = null;
+    }
+    if (outsideRoot) {
+      rmSync(outsideRoot, { recursive: true, force: true });
+      outsideRoot = null;
+    }
+  });
+
+  it('skips symbolic links during scan output generation', () => {
+    projectRoot = setupTree({
+      'src/real.ts': 'export const real = 1;\n',
+    });
+    outsideRoot = mkdtempSync(join(tmpdir(), 'ua-scan-outside-'));
+    const outsideFile = join(outsideRoot, 'secret.ts');
+    writeFileSync(outsideFile, 'export const secret = 1;\n', 'utf-8');
+    symlinkSync(outsideFile, join(projectRoot, 'src/link.ts'));
+
+    const r = runScript(projectRoot);
+    expect(r.status).toBe(0);
+    expect(byPath(r.output, 'src/real.ts')).toBeDefined();
+    expect(byPath(r.output, 'src/link.ts')).toBeUndefined();
+    expect(r.stderr).toMatch(/symbolic link skipped for safety/);
   });
 });

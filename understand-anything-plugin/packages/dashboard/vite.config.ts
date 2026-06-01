@@ -11,6 +11,17 @@ import crypto from "crypto";
 // to fetch knowledge-graph.json or diff-overlay.json.
 const ACCESS_TOKEN = process.env.UNDERSTAND_ACCESS_TOKEN || crypto.randomBytes(16).toString("hex");
 const MAX_SOURCE_FILE_BYTES = 1024 * 1024;
+const MAX_GRAPH_FILE_BYTES = 50 * 1024 * 1024;
+
+function isPathWithinRoot(projectRoot: string, candidatePath: string): boolean {
+  const relativeToRoot = path.relative(projectRoot, candidatePath);
+  return (
+    relativeToRoot === "" ||
+    (!relativeToRoot.startsWith(`..${path.sep}`) &&
+      relativeToRoot !== ".." &&
+      !path.isAbsolute(relativeToRoot))
+  );
+}
 
 function graphFileCandidates(fileName: string): string[] {
   const graphDir = process.env.GRAPH_DIR;
@@ -111,7 +122,30 @@ function rejectFileRequest(message: string, statusCode = 400) {
   return { statusCode, payload: { error: message } };
 }
 
-function readSourceFile(url: URL) {
+export function readJsonFileWithLimit(filePath: string, maxBytes = MAX_GRAPH_FILE_BYTES) {
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(filePath);
+  } catch {
+    return { statusCode: 404, payload: { error: "File not found" } };
+  }
+
+  if (!stat.isFile()) {
+    return { statusCode: 400, payload: { error: "Path is not a file" } };
+  }
+
+  if (stat.size > maxBytes) {
+    return { statusCode: 413, payload: { error: "Graph file is too large to serve" } };
+  }
+
+  try {
+    return { statusCode: 200, payload: JSON.parse(fs.readFileSync(filePath, "utf-8")) };
+  } catch {
+    return { statusCode: 500, payload: { error: "Failed to read graph file" } };
+  }
+}
+
+export function readSourceFile(url: URL) {
   const requestedPath = url.searchParams.get("path") ?? "";
   if (!requestedPath) return rejectFileRequest("Missing path");
   if (requestedPath.includes("\0")) return rejectFileRequest("Invalid path");
@@ -134,15 +168,10 @@ function readSourceFile(url: URL) {
 
   const projectRoot = projectRootFromGraphFile(graphFile);
   const absoluteFile = path.resolve(projectRoot, normalizedPath);
-  const relativeToRoot = path.relative(projectRoot, absoluteFile);
-  if (
-    !relativeToRoot ||
-    relativeToRoot.startsWith(`..${path.sep}`) ||
-    relativeToRoot === ".." ||
-    path.isAbsolute(relativeToRoot)
-  ) {
+  if (!isPathWithinRoot(projectRoot, absoluteFile)) {
     return rejectFileRequest("Path must stay inside the project");
   }
+  const relativeToRoot = path.relative(projectRoot, absoluteFile);
   const safeRelativePath = relativeToRoot.split(path.sep).join("/");
   if (!graphFilePathSet(graphFile, projectRoot).has(safeRelativePath)) {
     return rejectFileRequest("File is not in the knowledge graph", 404);
@@ -160,7 +189,17 @@ function readSourceFile(url: URL) {
     return rejectFileRequest("File is too large to preview", 413);
   }
 
-  const buffer = fs.readFileSync(absoluteFile);
+  let realFile: string;
+  try {
+    realFile = fs.realpathSync(absoluteFile);
+  } catch {
+    return rejectFileRequest("File not found", 404);
+  }
+  if (!isPathWithinRoot(projectRoot, realFile)) {
+    return rejectFileRequest("File not found", 404);
+  }
+
+  const buffer = fs.readFileSync(realFile);
   if (buffer.includes(0)) return rejectFileRequest("Binary files cannot be previewed", 415);
 
   const content = buffer.toString("utf8");
@@ -245,6 +284,8 @@ export default defineConfig({
         });
 
         server.middlewares.use((req, res, next) => {
+          res.setHeader("Referrer-Policy", "no-referrer");
+
           const url = new URL(req.url ?? "/", "http://127.0.0.1:5173");
           const pathname = url.pathname;
           const isProtectedEndpoint =
@@ -277,14 +318,15 @@ export default defineConfig({
             const configCandidates = graphFileCandidates("config.json");
             for (const candidate of configCandidates) {
               if (fs.existsSync(candidate)) {
-                try {
-                  const raw = JSON.parse(fs.readFileSync(candidate, "utf-8"));
-                  sendJson(res, 200, raw);
-                  return;
-                } catch {
+                const result = readJsonFileWithLimit(candidate);
+                if (result.statusCode === 200) {
+                  sendJson(res, 200, result.payload);
+                } else if (result.statusCode === 413) {
+                  sendJson(res, 413, { error: "Config file is too large to serve" });
+                } else {
                   sendJson(res, 500, { error: "Failed to read config file" });
-                  return;
                 }
+                return;
               }
             }
             sendJson(res, 200, { autoUpdate: false, outputLanguage: "en" });
@@ -309,8 +351,17 @@ export default defineConfig({
             // Nodes can contain filePath values like /Users/alice/company/src/auth.ts.
             // We convert those to relative paths (src/auth.ts) so the developer's
             // home directory and company directory layout are not leaked.
+            const readResult = readJsonFileWithLimit(candidate);
+            if (readResult.statusCode !== 200) {
+              if (readResult.statusCode === 413) {
+                sendJson(res, 413, { error: "Graph file is too large to serve" });
+                return;
+              }
+              sendJson(res, 500, { error: "Failed to read graph file" });
+              return;
+            }
             try {
-              const raw = JSON.parse(fs.readFileSync(candidate, "utf-8")) as {
+              const raw = readResult.payload as {
                 nodes?: Array<Record<string, unknown>>;
                 [key: string]: unknown;
               };

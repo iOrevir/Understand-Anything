@@ -53,6 +53,7 @@ import { dirname, resolve, join, basename, extname, relative, sep } from 'node:p
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   existsSync,
+  lstatSync,
   readFileSync,
   readdirSync,
   realpathSync,
@@ -699,6 +700,14 @@ async function main() {
     // Stat first — git ls-files could include paths that vanished between
     // listing and processing; the walker shouldn't but defensive anyway.
     try {
+      const lst = lstatSync(absPath);
+      if (lst.isSymbolicLink()) {
+        process.stderr.write(
+          `Warning: scan-project: ${rel} — symbolic link skipped for safety ` +
+          `— file skipped from output\n`,
+        );
+        continue;
+      }
       const st = statSync(absPath);
       if (!st.isFile()) {
         // Symlinks-to-dir, special files, etc. — skip silently. Not a

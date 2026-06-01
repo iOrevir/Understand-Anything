@@ -35,7 +35,7 @@ const KeyboardShortcutsHelp = lazy(
 const OnboardingOverlay = lazy(() => import("./components/OnboardingOverlay"));
 
 const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === "true";
-const SESSION_TOKEN_KEY = "understand-anything-token";
+export const SESSION_TOKEN_KEY = "understand-anything-token";
 const ONBOARDING_DISMISSED_KEY = "ua-onboarding-dismissed-v1";
 type SidebarTab = "info" | "files";
 
@@ -67,7 +67,7 @@ function dataUrl(fileName: string, token: string | null): string {
  * Resolve the access token from the URL query string or sessionStorage.
  * If found in the URL, persist to sessionStorage and strip the param from the address bar.
  */
-function resolveInitialToken(): string | null {
+export function resolveInitialToken(): string | null {
   if (DEMO_MODE) return "__demo__";
   const params = new URLSearchParams(window.location.search);
   const urlToken = params.get("token");
