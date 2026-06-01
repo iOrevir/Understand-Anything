@@ -34,9 +34,9 @@
  */
 
 import { createRequire } from 'node:module';
-import { dirname, resolve, join, posix } from 'node:path';
+import { dirname, resolve, join, posix, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // skills/understand/ -> plugin root is two dirs up
@@ -102,6 +102,11 @@ function resolveRelative(dir, rel) {
 function dirOf(p) {
   const i = p.lastIndexOf('/');
   return i === -1 ? '' : p.slice(0, i);
+}
+
+function isPathWithinRoot(projectRoot, candidatePath) {
+  const rel = toPosix(relative(projectRoot, candidatePath));
+  return rel === '' || (rel !== '..' && !rel.startsWith('../'));
 }
 
 // ---------------------------------------------------------------------------
@@ -1446,11 +1451,41 @@ async function main() {
     }
 
     const absolutePath = join(projectRoot, file.path);
+    let realAbsolutePath = absolutePath;
+
+    // Skip symlinks and anything that resolves outside projectRoot.
+    try {
+      const lst = lstatSync(absolutePath);
+      if (lst.isSymbolicLink()) {
+        process.stderr.write(
+          `Warning: extract-import-map: import resolution failed for ${path} ` +
+          `(symbolic link skipped for safety) — importMap[${path}]=[]\n`,
+        );
+        importMap[path] = [];
+        continue;
+      }
+      realAbsolutePath = realpathSync(absolutePath);
+      if (!isPathWithinRoot(projectRoot, realAbsolutePath)) {
+        process.stderr.write(
+          `Warning: extract-import-map: import resolution failed for ${path} ` +
+          `(resolved path escaped project root) — importMap[${path}]=[]\n`,
+        );
+        importMap[path] = [];
+        continue;
+      }
+    } catch (err) {
+      process.stderr.write(
+        `Warning: extract-import-map: import resolution failed for ${path} ` +
+        `(path validation error: ${err.message}) — importMap[${path}]=[]\n`,
+      );
+      importMap[path] = [];
+      continue;
+    }
 
     // Read file content (per-file resilience)
     let content;
     try {
-      content = readFileSync(absolutePath, 'utf-8');
+      content = readFileSync(realAbsolutePath, 'utf-8');
     } catch (err) {
       process.stderr.write(
         `Warning: extract-import-map: import resolution failed for ${path} ` +
