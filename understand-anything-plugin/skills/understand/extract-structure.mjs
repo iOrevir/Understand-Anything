@@ -17,9 +17,9 @@
  */
 
 import { createRequire } from 'node:module';
-import { dirname, resolve, join } from 'node:path';
+import { dirname, resolve, join, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // skills/understand/ -> plugin root is two dirs up
@@ -42,6 +42,11 @@ try {
 }
 
 const { TreeSitterPlugin, PluginRegistry, builtinLanguageConfigs, registerAllParsers } = core;
+
+function isPathWithinRoot(projectRoot, candidatePath) {
+  const rel = relative(projectRoot, candidatePath);
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`));
+}
 
 // ---------------------------------------------------------------------------
 // Main
@@ -77,11 +82,32 @@ async function main() {
 
   for (const file of batchFiles) {
     const absolutePath = join(projectRoot, file.path);
+    let safeAbsolutePath = absolutePath;
+
+    try {
+      const lst = lstatSync(absolutePath);
+      if (lst.isSymbolicLink()) {
+        // Skip symlinks outright so batch analysis cannot follow links outside
+        // projectRoot. realpath containment is still enforced for non-symlink
+        // paths coming from batch input.
+        filesSkipped.push(file.path);
+        continue;
+      }
+      const real = realpathSync(absolutePath);
+      if (!isPathWithinRoot(projectRoot, real)) {
+        filesSkipped.push(file.path);
+        continue;
+      }
+      safeAbsolutePath = real;
+    } catch {
+      filesSkipped.push(file.path);
+      continue;
+    }
 
     // Read file content
     let content;
     try {
-      content = readFileSync(absolutePath, 'utf-8');
+      content = readFileSync(safeAbsolutePath, 'utf-8');
     } catch {
       filesSkipped.push(file.path);
       continue;
